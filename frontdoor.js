@@ -7,6 +7,7 @@ requirejs.config({
         mixins: '../app/Mixins',
         utils: '../app/Utils',
         units: '../app/Units',
+        shaders: '../app/Shaders',
     	pixi: "https://cdnjs.cloudflare.com/ajax/libs/pixi.js/5.2.0/pixi", //4.8.6 last stable
 	    jquery: "https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min",
 	    howler: "https://cdnjs.cloudflare.com/ajax/libs/howler/2.0.4/howler.min",
@@ -14,7 +15,8 @@ requirejs.config({
 	    matterCollisionPlugin: "https://cdn.jsdelivr.net/npm/matter-collision-events@0.1.7/build/matter-collision-events",
 	    particles: "pixi-particles/pixi-particles",
 		'pixi-filters': "pixi-filters/pixi-filters",
-        'pixi-spine': "pixi-spine/pixi-spine"
+        'pixi-spine': "pixi-spine/pixi-spine",
+        'pixi-layers': "pixi-layers/pixi-layers"
     },
     shim: {
         "pixi": {
@@ -132,9 +134,10 @@ requirejs(['jquery', 'pixi'], function($, PIXI) {
 
     window.PIXI = PIXI;
 
-    //register pixi spine plugin, the pixi-spine lib adds itself to the PIXI namespace, wish there were a better way to do this
+    //Register pixi spine plugin, the pixi-spine lib adds itself to the PIXI namespace, wish there were a better way to do this
     //but this is essentially taken from https://github.com/pixijs/pixi-spine/
-    require(['pixi-spine'], function(spine) {
+    //Same with pixi-layers
+    require(['pixi-spine', 'pixi-layers'], function(spine, pixiLayers) {
         	var loader = PIXI.Loader.shared;
         	loader.loaderDeferred = $.Deferred();
 
@@ -145,13 +148,11 @@ requirejs(['jquery', 'pixi'], function($, PIXI) {
         	loader.add('ChalkboardSheet', 'app/Textures/ChalkboardSheet.json');
         	loader.add('rainyBackgroundAndMarbles', 'app/Textures/RainyBackgroundAndMarbles.json');
         	loader.add('GrayBackground', 'app/Textures/GrayBackground.png');
+        	loader.add('GrassTiles', 'app/Textures/GrassTiles.json');
 
         	//animations
         	loader.add('BlueTargetDeath', 'app/Textures/BlueTargetDeath.json');
         	loader.ssBlueDeathFrameCount = 6;
-
-        	loader.add('baneExplosion', 'app/Textures/BaneExplosionSheet.json');
-        	loader.baneExplosionFrameCount = 5;
 
         	loader.add('blueCollapse', 'app/Textures/blueCollapse.json');
         	loader.blueCollapseFrameCount = 6;
@@ -159,21 +160,26 @@ requirejs(['jquery', 'pixi'], function($, PIXI) {
         	loader.add('raindropflash', 'app/Textures/DropletFlash.json');
         	loader.raindropflashFrameCount = 3;
 
-        	loader.add('quickDrawSheet', 'app/Textures/QuickDrawSheet.json');
+        	loader.add('gauntlet', 'app/Textures/Gauntlet.json');
         	loader.DiamondFlashFrameCount = 4;
         	loader.SquareWithBorderDeathFrameCount = 5;
 
-        	//character animations
-        	loader.add('marine0', 'app/Textures/marine-0.json');
+        	//death animations
+        	loader.add('deathAnimations', 'app/Textures/DeathAnimations.json');
 
         	//odds and ends
         	loader.add('unitMisc', 'app/Textures/UnitMisc.json');
         	loader.add('iso1', 'app/Textures/IsometricSheet1.json');
+            loader.add('iso2', 'app/Textures/IsoSheet2.json');
         	loader.add('raindrop2', 'app/Textures/Raindrop2.png');
         	loader.add('alpha', 'app/Textures/alpha.png');
         	loader.add('glassShards', 'app/Textures/glassShards.png');
         	loader.add('snowflakeSheet', 'app/Textures/SnowflakeSheet.json');
         	loader.add('dullLandscape', 'app/Textures/DullLandscapeLess.jpg');
+
+            //foliage
+        	loader.add('foliage1', 'app/Textures/FoliagePack1.json');
+        	loader.add('foliage2', 'app/Textures/avtrees.json');
 
             //spine assets
             loader.add('marineN', 'app/SpineAssets/Marine Exports/MarineN/N.json');
@@ -181,6 +187,12 @@ requirejs(['jquery', 'pixi'], function($, PIXI) {
             loader.add('marineS', 'app/SpineAssets/Marine Exports/MarineS/S.json');
             loader.add('marineSW', 'app/SpineAssets/Marine Exports/MarineSW/SW.json');
             loader.add('marineW', 'app/SpineAssets/Marine Exports/MarineW/W.json');
+
+            loader.add('medicN', 'app/SpineAssets/Medic Exports/MedicN/N.json');
+            loader.add('medicNW', 'app/SpineAssets/Medic Exports/MedicNW/NW.json');
+            loader.add('medicS', 'app/SpineAssets/Medic Exports/MedicS/S.json');
+            loader.add('medicSW', 'app/SpineAssets/Medic Exports/MedicSW/SW.json');
+            loader.add('medicW', 'app/SpineAssets/Medic Exports/MedicW/W.json');
 
             loader.load();
             loader.once('complete', function() {

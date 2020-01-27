@@ -1,6 +1,7 @@
 define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'mixins/_Moveable', 'mixins/_Attacker',
-'units/Gunner', 'units/Baneling', 'pixi-filters', 'utils/GameUtils'],
-function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, Gunner, Baneling, filters, utils) {
+'units/Marine', 'units/Baneling', 'pixi-filters', 'utils/GameUtils', 'units/Medic', 'shaders/SimpleLightFragmentShader',
+'utils/TileMapper', 'utils/Doodad'],
+function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, Marine, Baneling, filters, utils, Medic, lightShader, TileMapper, Doodad) {
 
     var targetScore = 1;
 
@@ -34,7 +35,9 @@ function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, Gunner, Baneling,
         small: 8,
         zoneSize: 128,
         level: 1,
-        victoryCondition: {type: 'lives', limit: 95},
+        // victoryCondition: {type: 'timed', limit: 5},
+        victoryCondition: {type: 'lives', limit: 5},
+        enableUnitSystem: true,
         currentZones: [],
         selectionBox: true,
         noClickIndicator: true,
@@ -53,14 +56,43 @@ function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, Gunner, Baneling,
             this.pop = utils.getSound('pop1.wav');
 
             //create blue glow filter
-            //this.blueGlowFilter = new PIXI.Filter(null, blueGlowShader)
+            this.simpleLightShader = new PIXI.Filter(null, lightShader, {
+                lightOnePosition: {x: -10000.0, y: -10000.0},
+                lightTwoPosition: {x: -10000.0, y: -10000.0},
+                stageResolution: utils.getCanvasWH()
+            });
+            //currentGame.renderer.background.filters = [this.simpleLightShader];
+
+            //map the background
+            var grassColor = 'Teal';
+            var backgroundTiles = [];
+            for(var x = 0; x < 6; x++) {
+                backgroundTiles.push(grassColor + 'Grass' + (x+1));
+            }
+            //backgroundTiles = ['YellowGrass1','TealGrass1','GreenGrass1','RedGrass1', 'OrangeGrass1']
+            var tileMap = TileMapper.produceTileMap({possibleTextures: backgroundTiles, tileWidth: 180, realTileWidth: 370});
+            tileMap.initialize({where: 'background'});
+
+            //create some Doodads
+            var tree1 = new Doodad({collides: true, radius: 20, texture: 'avgoldtree1', stage: 'stage', scale: {x: .6, y: .6}, offset: {x: 0, y: -75}, sortYOffset: 75,
+                                    shadowScale: {x: 2, y: 2}, shadowOffset: {x: -6, y: 20}})
+
+
+
+
+            utils.addAmbientLightsToBackground([0x660000, 0x00cc44, 0x660066, 0x00cc44, 0x660000, 0x660000, 0x4d79ff], null, .3);
+
         },
 
         play: function(options) {
             this.nextLevel();
 
+            var tree1 = new Doodad({drawWire: true, collides: true, radius: 20, texture: 'avsnowtree1', stage: 'stage', scale: {x: .6, y: .6}, offset: {x: 0, y: -50}, sortYOffset: 75, shadowScale: {x: 2, y: 2}, shadowOffset: {x: -6, y: 20}})
+
+            var tree1 = new Doodad({drawWire: false, collides: true, radius: 20, texture: 'avsnowtree7', stage: 'stage', scale: {x: 1, y: 1}, offset: {x: -6, y: -55}, sortYOffset: 75, shadowScale: {x: 2, y: 2}, shadowOffset: {x: 2, y: 28}})
+
             this.addTimer({name: 'newbane', gogogo: true, timeLimit: 4000, callback: function() {
-//                this.createBane(15);
+
             }.bind(this)});
         },
 
@@ -93,36 +125,42 @@ function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, Gunner, Baneling,
                 var numberOfBanes = Math.floor(numberOfDrones*.75); // three fourths-ish
             }
 
-            this.createGunner(1);
-            this.createBane(5);
-
-            // var spineNorthWest = new PIXI.spine.Spine(PIXI.Loader.shared.resources['marineNW'].spineData);
-            // var spineNorth = new PIXI.spine.Spine(PIXI.Loader.shared.resources['marineN'].spineData);
-            // spineNorthWest.state.setAnimation(0, 'walk', true);
-            // spineNorth.state.setAnimation(0, 'walk', true);
-            // utils.addSomethingToRenderer(spineNorthWest, {position: {x: this.getCanvasCenter().x, y: this.getCanvasHeight()}, scale: {x: .5, y: .5}})
-            // utils.addSomethingToRenderer(spineNorth, {position: {x: this.getCanvasCenter().x + 50, y: this.getCanvasHeight()}, scale: {x: .55, y: .55}})
+            this.createMarine(4);
+            this.createMedic(1);
+            this.createBane(4);
+            var posUpdate = this.addRunnerCallback(function() {
+                this.simpleLightShader.uniforms.lightOnePosition = this.medic.position;
+                this.simpleLightShader.uniforms.lightTwoPosition = this.marine.position;
+            }.bind(this));
+            utils.deathPact(this.medic, posUpdate);
         },
 
-        createGunner: function(number) {
+        createMarine: function(number) {
             for(x = 0; x < number; x++) {
-                var gunner = Gunner({team: currentGame.playerTeam});
-                gunner.typeId = 34;
-                gunner.directional = true;
-                utils.placeBodyWithinRadiusAroundCanvasCenter(gunner, 4);
+                var marine = Marine({team: currentGame.playerTeam});
+                marine.typeId = 34;
+                marine.directional = true;
+                utils.placeBodyWithinRadiusAroundCanvasCenter(marine, 4);
+                this.addUnit(marine, true);
+                this.marine = marine;
+            }
+        },
 
-    //          this.blueGlowFilter.uniforms.unitStart = {x: marble.position.x, y: marble.position.y};
-              //  this.addTickCallback(function() {
-              //      this.blueGlowFilter.uniforms.currentUnitPosition = {x: marble.position.x, y: marble.position.y};
-              //  }.bind(this))
-
-                this.addUnit(gunner, true);
+        createMedic: function(number) {
+            for(x = 0; x < number; x++) {
+                var medic = Medic({team: currentGame.playerTeam});
+                medic.typeId = 35;
+                medic.directional = true;
+                utils.placeBodyWithinRadiusAroundCanvasCenter(medic, 4);
+                this.addUnit(medic, true);
+                this.medic = medic;
             }
         },
 
         createBane: function(number) {
             for(x = 0; x < number; x++) {
-                var bane = Baneling({team: 2, isSelectable: false});
+                //var tint = x%2==0 ? 0xff0000 : null;
+                var bane = Baneling({team: 4, isSelectable: false});
                 utils.placeBodyWithinRadiusAroundCanvasCenter(bane, 4);
 
     //          this.blueGlowFilter.uniforms.unitStart = {x: marble.position.x, y: marble.position.y};
@@ -149,7 +187,7 @@ function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, Gunner, Baneling,
      * Options to for the game starter
      */
     game.worldOptions = {
-            background: {image: 'Grass', scale: {x: 1.0, y: 1.0}},
+            //background: {image: 'Grass', scale: {x: 1.0, y: 1.0}},
                 width: 1200,
                 height: 600,
                 gravity: 0,

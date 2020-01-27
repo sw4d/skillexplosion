@@ -16,14 +16,6 @@ function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, utils) {
 				this.currentDirection = event.direction;
 			}.bind(this))
 
-			//this comes from moveable
-			Matter.Events.on(this.unit, 'pause', function(event) {
-				if(this.unit.isMoving) {
-					this.currentAnimation.stop();
-					this.currentAnimation.isStopped = true;
-				}
-			}.bind(this))
-
 			//turn on idle
 			Matter.Events.on(this.unit, 'stop', function(event) {
 				if(!this.idleTimer)
@@ -75,6 +67,7 @@ function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, utils) {
 				var index = utils.getRandomIntInclusive(0, Object.keys(self.unit.walkAnimations).length-1)
 				self.switchAnimation(self.unit.walkAnimations[Object.keys(self.unit.walkAnimations)[index]], {stop: true, idle: true});
 			}})
+			utils.deathPact(this.unit, this.idleTimer);
 		}
 	}
 

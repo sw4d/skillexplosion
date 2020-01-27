@@ -3,6 +3,39 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'mixins/_Moveabl
 
     function($, Matter, PIXI, CommonGameMixin, Moveable, Attacker, Iso, utils, CommandQueue, Command) {
 
+        var hoverShader = `
+            precision mediump float;
+            varying vec2 vTextureCoord;
+            uniform sampler2D uSampler;
+            uniform float r;
+            uniform float g;
+            uniform float b;
+            uniform float a;
+            uniform bool active;
+
+            void main(){
+                if(active) {
+                    gl_FragColor = texture2D(uSampler, vTextureCoord);
+                    if(gl_FragColor.a > 0.3) {
+                        if(r > 0.0) {
+                            gl_FragColor.r = r;
+                        }
+                        if(g > 0.0) {
+                            gl_FragColor.g = g;
+                        }
+                        if(b > 0.0) {
+                            gl_FragColor.b = b;
+                        }
+                        if(a > 0.0) {
+                            gl_FragColor.a = a;
+                        }
+                    }
+                } else {
+                    gl_FragColor = texture2D(uSampler, vTextureCoord);
+                }
+            }
+        `;
+
         //default unit attributes
         var UnitBase = {
             isUnit: true,
@@ -14,7 +47,9 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'mixins/_Moveabl
             isSelectable: true,
             isAttackable: true,
             team: 4,
-            eventMappings: {},
+            eventClickMappings: {},
+            eventKeyMappings: {},
+
             sufferAttack: function(damage) {
                 this.currentHealth -= damage;
                 if (this.currentHealth <= 0) {
@@ -23,27 +58,99 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'mixins/_Moveabl
                 Matter.Events.trigger(this, 'sufferedAttack', damage);
             },
 
+            canTargetUnit: function(unit) {
+                return unit.isAttackable && this.team != unit.team;
+            },
+
             initUnit: function() {
 
-                this.commandQueue = CommandQueue();
+                // setup health and energy
+                if (this.health) {
+                    this.maxHealth = this.health;
+                    this.currentHealth = this.health;
+                }
 
+                if (this.energy) {
+                    this.maxEnergy = this.energy;
+                    this.currentEnergy = this.energy;
+                }
+
+                //event handling/dispatch queue
+                this.commandQueue = CommandQueue();
                 this.handleEvent = function(event) {
-                    if(this.eventMappings[event.id]) {
-                        var newCommand = Command({
-                            queue: this.commandQueue,
-                            method: this.eventMappings[event.id],
-                            context: this,
-                            target: event.target
-                        })
-                        if(keyStates['Shift']) {
-                            this.commandQueue.enqueue(newCommand);
+                    if(event.type == 'click') {
+                        if(this.eventClickMappings[event.id]) {
+                            var newCommand = Command({
+                                queue: this.commandQueue,
+                                method: this.eventClickMappings[event.id],
+                                context: this,
+                                target: event.target
+                            })
+                            if(keyStates['Shift']) {
+                                this.commandQueue.enqueue(newCommand);
+                            }
+                            else {
+                                this.commandQueue.clear();
+                                this.commandQueue.enqueue(newCommand);
+                            }
                         }
-                        else {
-                            this.commandQueue.clear();
-                            this.commandQueue.enqueue(newCommand);
+                    } else if(event.type == 'key') {
+                        if(this.eventKeyMappings[event.id]) {
+                            var newCommand = Command({
+                                queue: this.commandQueue,
+                                method: this.eventKeyMappings[event.id],
+                                context: this,
+                                target: event.target
+                            })
+                            if(keyStates['Shift']) {
+                                this.commandQueue.enqueue(newCommand);
+                            }
+                            else {
+                                this.commandQueue.clear();
+                                this.commandQueue.enqueue(newCommand);
+                            }
                         }
                     }
-                },
+                };
+
+                //add filter on the main render sprite
+                var hoverFilter = new PIXI.Filter(undefined, hoverShader, {active: false, r: 0.0, g: 0.0, b: 0.0});
+                // var hoverShad = new PIXI.Shader(hoverFrag.program, {});
+                if(this.mainRenderSprite) {
+                    if($.isArray(this.mainRenderSprite)) {
+                        $.each(this.mainRenderSprite, function(i, spriteId) {
+                            $.each(this.renderChildren, function(index, child) {
+                                if(child.id == spriteId) {
+                                    child.filter = hoverFilter;
+                                }
+                            }.bind(this))
+                        }.bind(this))
+                    } else {
+                        $.each(this.renderChildren, function(index, child) {
+                            if(child.id == this.mainRenderSprite) {
+                                child.filter = hoverFilter;
+                            }
+                        }.bind(this))
+                    }
+                };
+
+                //hover Method
+                this.hover = function(event) {
+                    hoverFilter.uniforms.active = true;
+                    if(this.team != event.team) {
+                        hoverFilter.uniforms.r = 1;
+                        hoverFilter.uniforms.g = .3;
+                        hoverFilter.uniforms.b = .1;
+                    } else {
+                        hoverFilter.uniforms.r = 0.0;
+                        hoverFilter.uniforms.g = .4;
+                        hoverFilter.uniforms.b = 0.0;
+                    }
+                };
+
+                this.unhover = function(event) {
+                    hoverFilter.uniforms.active = false;
+                }
 
                 Matter.Events.on(this, 'addUnit', function() {
 
@@ -116,8 +223,7 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'mixins/_Moveabl
                             }
                         }.bind(this))
 
-                        currentGame.deathPact(this, updateHealthTick);
-
+                        utils.deathPact(this, updateHealthTick);
                     }
                 }.bind(this));
 

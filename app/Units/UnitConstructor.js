@@ -13,28 +13,27 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'mixins/_Moveabl
          */
         function UnitConstructor(options) {
 
-            var newUnit = $.extend({}, ub, options.unit);
-
-            // setup health and energy
-            if (this.health) {
-                this.maxHealth = this.health;
-                this.currentHealth = this.health;
-            }
-
-            if (this.energy) {
-                this.maxEnergy = this.energy;
-                this.currentEnergy = this.energy;
-            }
+            var newUnit = $.extend(true, {}, ub, options.unit);
 
             // create body
             var body = Matter.Bodies.circle(0, 0, options.radius, {
                 restitution: .95,
                 frictionAir: .9,
                 mass: options.mass || 5,
+                originalMass: options.mass || 5
             });
+
+            body.drawWire = false;
 
             body.unit = newUnit; //reference to parent
             newUnit.body = body; //reference to body
+
+            //Set infrastructure attributes
+            if (options.renderChildren)
+                newUnit.renderChildren = options.renderChildren;
+
+            if (options.mainRenderSprite)
+                newUnit.mainRenderSprite = options.mainRenderSprite;
 
             /*
              * We cycle through matter bodies rather than units in many places (PixiRenderer mainly),
@@ -64,6 +63,16 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'mixins/_Moveabl
             Object.defineProperty(body, 'isMoving', {
                 get: function() {
                     return this.unit.isMoving;
+                }
+            });
+            Object.defineProperty(body, 'isAttacking', {
+                get: function() {
+                    return this.unit.isAttacking;
+                }
+            });
+            Object.defineProperty(body, 'isHoning', {
+                get: function() {
+                    return this.unit.isHoning;
                 }
             });
             Object.defineProperty(body, 'renderlings', {
@@ -105,12 +114,9 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'mixins/_Moveabl
                 }
             });
 
-            if (options.renderChildren)
-                newUnit.renderChildren = options.renderChildren;
-
             // mixin moveable and its given properties
             if (options.moveable) {
-                $.extend(true, newUnit, Moveable);
+                $.extend(newUnit, Moveable);
                 $.extend(newUnit, options.moveable);
                 newUnit.moveableInit();
             }

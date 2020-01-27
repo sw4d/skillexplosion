@@ -3,6 +3,8 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
     return {
         //private
         isAttacker: true,
+        isAttacking: false,
+        isHoning: false,
         currentTarget: null,
         currentHone: null,
         canAttack: true,
@@ -22,7 +24,7 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
         damage: 6,
 
         initAttacker: function() {
-            this.eventMappings['attackMove'] = this.attackMove;
+            this.eventClickMappings['attackMove'] = this.attackMove;
             this.availableTargets = new Set();
             this.cooldownTimer = currentGame.addTimer({
                 name: 'cooldown' + this.body.id,
@@ -37,24 +39,32 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
             //extend move to cease attacking
             this.rawMove = this.move;
             var originalMove = this.move;
-            this.move = function(destination, command) {
-                originalMove.call(this, destination, command);
+            this.move = function move(destination, commandObj) {
+                this.isAttacking = false;
+                this.isHoning = false;
+                this.attackMoveDestination = null;
+                this.attackMoving = false;
+                originalMove.call(this, destination, commandObj);
                 this._becomePeaceful();
             }
+
             //also be sure to override the 'move' event mapping with the peaceful version
-            this.eventMappings['move'] = this.move;
+            this.eventClickMappings['move'] = this.move;
 
             //extend stop
             this.rawStop = this.stop;
             var originalStop = this.stop;
             this.stop = function() {
-                //nullify specified attack target
                 if (this.specifiedAttackTarget) {
                     Matter.Events.off(this.specifiedAttackTarget, 'onremove', this.specifiedCallback);
                     this.specifiedAttackTarget = null;
                 };
                 originalStop.call(this);
+                Matter.Sleeping.set(this.body, false);
+                this.isAttacking = false;
+                this.isHoning = false;
                 this.attackMoveDestination = null;
+                this.attackMoving = false;
                 this._becomeOnAlert();
             }
 
@@ -62,95 +72,30 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
         },
 
         _attack: function(target) {
-            if (this.canAttack) {
-                //if we attack, pause the movement, the attacking engine will resume movement
-                this.pause();
-                if (this.attack) {
+            if (this.canAttack && this.attack) {
+                this.rawStop();
 
-                    //Make the body stationary if attacking
-                    if(!this.body.isStatic) {
-                        Matter.Body.setStatic(this.body, true);
-                    }
-
-                    //Call attack()
-                    this.attack(target);
-                    Matter.Events.trigger(this, 'attack', {
-                        direction: utils.isoDirectionBetweenPositions(this.position, target.position)
-                    });
-                }
+                //set state
+                Matter.Sleeping.set(this.body, true);
+                this.isAttacking = true;
+                this.attackMoving = false;
                 this.canAttack = false;
                 this.cooldownTimer.reset();
                 this.cooldownTimer.runs = 1;
+                this.isHoning = false;
+
+                //call attack
+                this.attack(target);
+
+                //trigger the attack event
+                Matter.Events.trigger(this, 'attack', {
+                    direction: utils.isoDirectionBetweenPositions(this.position, target.position)
+                });
             }
         },
 
-        setupHoneAndTargetSensing: function(command) {
-            if(this.honeAndTargetSensorCallback)
-                currentGame.removeTickCallback(this.honeAndTargetSensorCallback);
-
-            var sensingFunction = function() {
-                this.currentHone = null; //blitz current hone?
-                this.currentTarget = null;
-                $.each(currentGame.bodiesByTeam, function(i, obj) {
-                    if (i != this.team) {
-                        var currentHoneDistance = null;
-                        var currentAttackDistance = null;
-                        $.each(obj, function(i, teamBody) {
-                            //specific attack target case
-                            if (this.specifiedAttackTarget && teamBody != this.specifiedAttackTarget) {
-                                return;
-                            }
-
-                            if (!teamBody.isAttackable) return;
-                            var dist = utils.distanceBetweenBodies(this.body, teamBody);
-                            if (dist > this.honeRange) return; //we're outside the larger distance, don't go further
-
-                            //determine the closest honable target
-                            if (!currentHoneDistance) {
-                                currentHoneDistance = dist;
-                                this.currentHone = teamBody;
-                            } else {
-                                if (dist < currentHoneDistance) {
-                                    currentHoneDistance = dist;
-                                    this.currentHone = teamBody;
-                                }
-                            }
-
-                            //figure out who (if anyone) is within range to attack
-                            if (dist <= this.range) {
-                                if (!currentAttackDistance) {
-                                    currentAttackDistance = dist;
-                                    this.currentTarget = teamBody.unit;
-                                } else {
-                                    if (dist < currentAttackDistance) {
-                                        currentAttackDistance = dist;
-                                        this.currentTarget = teamBody.unit;
-                                    }
-                                }
-                            }
-
-                        }.bind(this))
-                    }
-                }.bind(this))
-
-                //If we don't have a target anymore, and are static, un-static us
-                if(!this.currentTarget && this.body.isStatic) {
-                    Matter.Body.setStatic(this.body, false);
-                }
-
-                if (this.currentHone == null && this.currentTarget == null && this.attackMoveDestination && this.canAttack && !this.isMoving) {
-                    this.attackMove(this.attackMoveDestination, command);
-                }
-            }.bind(this)
-            this.honeAndTargetSensorCallback = currentGame.addTickCallback(sensingFunction);
-            utils.deathPact(this.honeAndTargetSensorCallback, 'honeAndTargetSensorCallback');
-        },
-
         //this assumes _moveable is mixed in
-        attackMove: function(destination, command) {
-
-            //setup target sensing (with command reference)
-            this.setupHoneAndTargetSensing(command);
+        attackMove: function(destination, commandObj) {
 
             //nullify specified attack target
             if (this.specifiedAttackTarget) {
@@ -158,23 +103,28 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
                 this.specifiedAttackTarget = null;
             };
 
+            //set state
             this.attackMoveDestination = destination;
+            this.attackMoving = true;
+            this.isAttacking = false;
+            this.isHoning = false;
 
-            //move unit
-            this.rawMove(destination, command);
+            //move unit, rawly
+            this.rawMove(this.attackMoveDestination, commandObj);
 
             //become alert to nearby enemies
-            this._becomeOnAlert(command);
+            this._becomeOnAlert(commandObj);
         },
 
         //this assumes _moveable is mixed in
         attackSpecificTarget: function(destination, target) {
 
-            if(target.team == this.team) {
-                this.attackMove({x: target.position.x, y: target.position.y});
+            if(!this.canTargetUnit(target)) {
+                this.attackMove({x: target.position.x, y: target.position.y}); //I think we need to pass the unit's position object
                 return;
             };
 
+            //set the specified target
             this.specifiedAttackTarget = target;
 
             //If the specified dies (is removed), stop and reset state.
@@ -182,10 +132,10 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
                 this.stop();
                 this.specifiedAttackTarget = null;
             }.bind(this);
-            var callback = Matter.Events.on(target, 'onremove', this.specifiedCallback);
+            var callback = Matter.Events.on(this.specifiedAttackTarget, 'onremove', this.specifiedCallback);
 
             //But if we die first, remove the onremove listener
-            currentGame.deathPact(this, function() {
+            utils.deathPact(this, function() {
                 Matter.Events.off(target, 'onremove', this.specifiedCallback);
             });
 
@@ -196,9 +146,13 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
             this._becomeOnAlert();
         },
 
-        _becomeOnAlert: function(command) {
+        _becomeOnAlert: function(commandObj) {
+
             //setup target sensing
-            this.setupHoneAndTargetSensing(command)
+            this.setupHoneAndTargetSensing(commandObj)
+
+            //reset last hone since this is a new alert
+            this.lastHone = null;
 
             /*
              * Honing callbacks
@@ -206,10 +160,14 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
             if (this.attackHoneTick) {
                 currentGame.removeTickCallback(this.attackHoneTick);
             }
-            //constantly scan for units within honing range and move towards them, unless we have a current target.
+            //unless we have a target, move towards currentHone
             this.attackHoneTick = currentGame.addTickCallback(function() {
-                if (this.currentHone && !this.currentTarget && this.canAttack && !this.specifiedAttackTarget)
-                    this.rawMove(this.currentHone.position, command);
+                //initiate a raw move towards the honed object. If we switch hones, we will initiate a new raw move
+                if (this.currentHone && this.lastHone != this.currentHone && !this.currentTarget && this.canAttack && !this.specifiedAttackTarget) {
+                    this.lastHone = this.currentHone;
+                    this.rawMove(this.currentHone.position);
+                    this.isHoning = true;
+                }
             }.bind(this));
             utils.deathPact(this, this.attackHoneTick, 'attackHoneTick')
 
@@ -219,22 +177,109 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
             if (this.attackMoveTick) {
                 currentGame.removeTickCallback(this.attackMoveTick);
             }
-            //constantly scan for units within range and issue attack
+            //if we have a target, attack it
             this.attackMoveTick = currentGame.addTickCallback(function() {
                 if (this.currentTarget) {
-                    this.pause(); //pause when we're in range of our target
+                    this.lastHone = null; //if we're attacking something, reset the lastHoned unit
                     this._attack(this.currentTarget);
                 }
             }.bind(this))
             utils.deathPact(this, this.attackMoveTick, 'attackMoveTick')
         },
 
-        /*
-         *
-         */
+        setupHoneAndTargetSensing: function(commandObj) {
+            if(this.honeAndTargetSensorCallback)
+                currentGame.removeTickCallback(this.honeAndTargetSensorCallback);
+
+            var sensingFunction = function() {
+                this.currentHone = null; //blitz current hone?
+                this.currentTarget = null;
+                var currentHoneDistance = null;
+                var currentAttackDistance = null;
+
+                currentGame.applyToBodiesByTeam(function(team) {
+                    if(this.attackHoneTeamPredicate)
+                        return this.attackHoneTeamPredicate(team);
+                    else
+                        return this.team != team;
+                }.bind(this), function(body) {
+                    if(body.unit) {
+                        return this.canTargetUnit(body.unit);
+                    } else {
+                        return false;
+                    }
+                }.bind(this), function(body) {
+                    //if we have a target specific, ignore other units, forcing currentTarget to be the specified unit
+                    if (this.specifiedAttackTarget && body.unit != this.specifiedAttackTarget) {
+                        return;
+                    }
+
+                    var dist = utils.distanceBetweenBodies(this.body, body);
+                    if (dist > this.honeRange) return; //we're outside the larger distance, don't go further
+
+                    //determine the closest honable target
+                    if (!currentHoneDistance) {
+                        currentHoneDistance = dist;
+                        this.currentHone = body;
+                    } else {
+                        if (dist < currentHoneDistance) {
+                            currentHoneDistance = dist;
+                            this.currentHone = body;
+                        }
+                    }
+
+                    //figure out who (if anyone) is within range to attack
+                    if (dist <= this.range) {
+                        if (!currentAttackDistance) {
+                            currentAttackDistance = dist;
+                            this.currentTarget = body.unit;
+                        } else {
+                            if (dist < currentAttackDistance) {
+                                currentAttackDistance = dist;
+                                this.currentTarget = body.unit;
+                            }
+                        }
+                    }
+                }.bind(this))
+
+                //If we were attacking but no longer have a target
+                if(!this.currentTarget && this.canAttack && this.isAttacking) {
+                    Matter.Sleeping.set(this.body, false);
+                    this.isAttacking = false;
+                }
+
+                //This clause is important:
+                //If we're here, we're on alert...
+                //Either we were given an attack move command, "still" and on alert, or were given a specific target
+                //If we were given an "attack move" command and no longer have a target or a hone, let's issue an identical attackMove command
+                //If we were "still" and no longer have a target or a hone, let's stop.
+                //If we were given a "specific target" to attack, we we only want to naturally stop if we can no longer attack it
+                if (!this.currentHone && !this.currentTarget) {
+                    //given attack move, reissue the attack move
+                    if(this.attackMoveDestination && (!this.attackMoving || this.isHoning) && this.canAttack) {
+                        this.attackMove(this.attackMoveDestination, commandObj);
+                    //we were still, let's stop
+                    } else if(!this.attackMoveDestination && !this.attackMoving && !this.specifiedAttackTarget) {
+                            this.stop();
+                    //else let's check to see if our specified attack target can still be targeted
+                    } else if(this.specifiedAttackTarget) {
+                        if(!this.canTargetUnit(this.specifiedAttackTarget)) {
+                            this.stop();
+                        }
+                    }
+                }
+            }.bind(this)
+            this.honeAndTargetSensorCallback = currentGame.addTickCallback(sensingFunction);
+            utils.deathPact(this, this.honeAndTargetSensorCallback, 'honeAndTargetSensorCallback');
+        },
+
         _becomePeaceful: function() {
             this.currentTarget = null;
             this.specifiedAttackTarget = null;
+            this.attackMoving = false;
+
+            if(this.honeAndTargetSensorCallback)
+                currentGame.removeTickCallback(this.honeAndTargetSensorCallback);
 
             if (this.attackMoveTick) {
                 currentGame.removeTickCallback(this.attackMoveTick);
@@ -242,15 +287,6 @@ define(['jquery', 'matter-js', 'pixi', 'games/CommonGameMixin', 'utils/GameUtils
             if (this.attackHoneTick) {
                 currentGame.removeTickCallback(this.attackHoneTick);
             }
-        },
-
-        //might use later for prioritizing targets
-        chooseTarget: function() {
-
-        },
-
-        attackChosenTarget: function() {
-
         },
     }
 

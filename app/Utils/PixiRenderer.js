@@ -9,13 +9,31 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 		var appendToElement = appendToElement || document.body;
 
 		this.engine = engine;
-		this.stages = {background: new PIXI.Container, stageZero: new PIXI.Container, stageOne: new PIXI.Container, stage: new PIXI.Container, foreground: new PIXI.Container, hud: new PIXI.Container};
-		$.each(this.stages, function(name, stage) {
 
-		})
+		//create stages (these don't handle sorting, see the laying group below)
+		this.stages = {background: new PIXI.Container, backgroundOne: new PIXI.Container, stageZero: new PIXI.Container, stageOne: new PIXI.Container, stage: new PIXI.Container, foreground: new PIXI.Container, hud: new PIXI.Container};
+
+		//create the layering groups
+		var i = 0;
+		this.layerGroups = {};
+		$.each(this.stages, function(key, stage) {
+			this.layerGroups[key] = new PIXI.display.Group(i, !options.noZSorting);
+			this.layerGroups[key].on('sort', (sprite) => {
+			    sprite.zOrder = sprite.y + (sprite.sortYOffset || 0);
+			});
+			i += 1;
+		}.bind(this));
+
+		//create the display stage
+		this.stage = new PIXI.display.Stage();
+
+		//Add the stages, and create a layer for the associated group as well. The layer API is very confusing...
+		$.each(this.layerGroups, function(key, layerGroup) {
+			this.stage.addChild(new PIXI.display.Layer(layerGroup));
+			this.stage.addChild(this.stages[key]);
+		}.bind(this))
 
 		this.setBackground = function(imagePath, options) {
-			//var background = new PIXI.Sprite(imagePath);
 			var background = this.itsMorphinTime(imagePath);
 
 			if(options.backgroundFilter) {
@@ -95,7 +113,7 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 				})
 
 			    //if all else fails, draw wire frame if specified
-				if(body.render.drawWire || body.renderChildren.length == 0) {
+				if(body.render.drawWire || body.renderChildren.length == 0 || body.drawWire) {
 				    if(body.noWire) return;
 					this.drawWireFrame(body);
 					return;
@@ -127,17 +145,16 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 			this.stages.background.interactive = true;
 			this.interactiveObject = this.stages.background;
 
-			//add each of our stages to the main pixi stage
-			$.each(this.stages, function(key, value) {
-				this.pixiApp.stage.addChild(value);
-			}.bind(this));
+			//set the pixiApp stage to be the display.Stage obj
+			this.pixiApp.stage = this.stage;
 
 			//add pixi canvas to dom
 			appendToElement = '#' + appendToElement;
 			$(appendToElement).append(this.pixiApp.renderer.view);
 
 			//set background - probably shouldn't be handling this in the pixi renderer
-			this.setBackground(options.background.image, {scale: {x: options.background.scale.x, y: options.background.scale.y}, bloat: options.background.bloat, backgroundFilter: options.backgroundFilter});
+			if(options.background)
+				this.setBackground(options.background.image, {scale: {x: options.background.scale.x, y: options.background.scale.y}, bloat: options.background.bloat, backgroundFilter: options.backgroundFilter});
 
 			Matter.Events.on(this.engine.world, 'afterAdd', function(event) {
 			    if(Array.isArray(event.object)) {
@@ -213,6 +230,9 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 				else
 					newSprite.filters = [child.filter];
 		    }
+			if(child.shader) {
+				newSprite.shader = null;
+			}
 			if(child.gameFilter) {
 		        this.pixiApp.stage.filters = [child.gameFilter];
 		    }
@@ -221,6 +241,9 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 		    }
 			if(child.avoidIsoMgr) {
 				newSprite.avoidIsoMgr = true;
+			}
+			if(child.sortYOffset) {
+				newSprite.sortYOffset = child.sortYOffset;
 			}
 
 		    //store original child specs
@@ -253,6 +276,7 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 			where = where || 'stage';
 			something.myLayer = where;
 			this.stages[where].addChild(something);
+			something.parentGroup = this.layerGroups[where];
 		};
 
 		//Method meant to unify creating a sprite based on various input
@@ -285,7 +309,10 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 			                if(something.indexOf('.png') < 0)
             					var pngSomething = something + '.png';
             					var jpgSomething = something + '.jpg';
-			                if(value.textures && value.textures[pngSomething]) {
+							if(value.textures && value.textures[something]) {
+								foundAtlasTexture = new PIXI.Sprite(value.textures[something]);
+							}
+			                else if(value.textures && value.textures[pngSomething]) {
 			                    foundAtlasTexture = new PIXI.Sprite(value.textures[pngSomething]);
 			                }
 			                else if(value.textures && value.textures[jpgSomething]) {
@@ -318,7 +345,14 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 				$.each(this.stages, function(key, value) {
 				    var i = this.stages[key].children.length;
 					while(i--) {
-						this.removeAndDestroyChild(this.stages[key], this.stages[key].getChildAt(i))
+						//even though we're decrementing here, cleaning up pixi particles can remove more than one child at a time
+						//so getChildAt could fail. If it does, let's just move on
+						try {
+							this.removeAndDestroyChild(this.stages[key], this.stages[key].getChildAt(i))
+						}
+						catch(err) {
+							//caught a child doesn't exist, which we just want to swallow and move on
+						}
 					}
 				}.bind(this));
 			} else { //have mercy on background and on persistables if wanted
@@ -326,9 +360,16 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 				    if(key == "background") return;
 					var i = this.stages[key].children.length;
 					while(i--) {
-						if((savePersistables && this.stages[key].getChildAt(i).persists))
-							continue;
-						this.removeAndDestroyChild(this.stages[key], this.stages[key].getChildAt(i))
+						//even though we're decrementing here, cleaning up pixi particles can remove more than one child at a time
+						//so getChildAt could fail. If it does, let's just move on
+						try {
+							if((savePersistables && this.stages[key].getChildAt(i).persists))
+								continue;
+							this.removeAndDestroyChild(this.stages[key], this.stages[key].getChildAt(i))
+						}
+						catch(err) {
+							//caught a child doesn't exist, which we just want to swallow and move on
+						}
 					}
 				}.bind(this));
 			}
@@ -338,7 +379,10 @@ define(['matter-js', 'pixi', 'jquery'], function(Matter, PIXI, $) {
 		//helper method for removing the child from its parent and calling the destroy method on the object being removed
 		this.removeAndDestroyChild = function(stage, child) {
 		    stage.removeChild(child);
-		    if(child.destroy)
+			if(child.constructor.name == 'Particle') {
+				child.emitter.cleanup();
+			}
+		    else if(child.destroy)
 				child.destroy(); //i'm unsure if I need to check for a destroy method first
 		}
 

@@ -10,10 +10,11 @@ define(['jquery', 'pixi', 'units/UnitConstructor', 'utils/GameUtils'], function(
 		var pendingSelectionTint = 0x70ff32;
 		var highlightTint = 0xFFFFFF;
 		var radius = 20;
-		var rc = [{
+		var rc = [
+			{
     			    id: 'marble',
     			    data: 'GlassMarble',
-    			    tint: tint,
+    			    tint: options.tint || tint,
     			    scale: {x: radius*2/64, y: radius*2/64},
     			    rotate: 'none',
     			}, {
@@ -32,29 +33,17 @@ define(['jquery', 'pixi', 'units/UnitConstructor', 'utils/GameUtils'], function(
     			    scale: {x: radius*2/64, y: radius*2/64},
     			    rotate: 'none',
     			    initialRotate: 'none'
-    			}, {
-    			    id: 'marbleShadow',
-    			    data: 'MarbleShadow',
-    			    scale: {x: radius*2.5/256, y: radius*2.5/256},
-    			    visible: true,
-    			    rotate: 'none',
-    			    tint: tint,
-    			    stage: "stageZero",
-    			    offset: {x: 12, y: 12},
-    			}, {
-    			    id: 'marbleShadowHighlights',
-    			    data: 'MarbleShadowHighlight',
-    			    scale: {x: radius*1.6/256, y: radius*1.6/256},
-    			    visible: false,
-    			    rotate: 'random',
-    			    rotatePredicate: function() {
-    			        return this.isMoving;
-    			    },
-    			    initialRotate: 'random',
-    			    tint: highlightTint,
-    			    stage: "stageZero",
-    			    offset: {x: 12, y: 12}
-    			}, {
+    			},
+				{
+		            id: 'shadow',
+		            data: 'IsoShadowBlurred',
+		            scale: {x: .75, y: .75},
+		            visible: true,
+		            avoidIsoMgr: true,
+		            rotate: 'none',
+		            stage: "stageZero",
+		            offset: {x: 0, y: 22}
+				}, {
     			    id: 'selected',
     			    data: 'MarbleSelected',
     			    scale: {x: (radius+5)*2/64, y: (radius+5)*2/64},
@@ -74,40 +63,48 @@ define(['jquery', 'pixi', 'units/UnitConstructor', 'utils/GameUtils'], function(
 
 		var baneling = UC({
 				renderChildren: rc,
+				mainRenderSprite: 'marble',
 				radius: radius,
 				unit: {
 					unitType: 'Baneling',
 					isoManaged: false,
-					health: 10,
+					health: 40,
 					energy: 0,
 					team: options.team || 4,
 					isSelectable: options.isSelectable,
 				},
 				moveable: {
-					moveSpeed: .2
+					moveSpeed: 1.8
 				},
 				attacker: {
 					honeRange: 200,
 					cooldown: 1,
 					range: radius*2+10,
-					damage: 18,
+					damage: 50,
 					attack: function() {
 
 					}
 		}});
 
 		//create attack blast radius
-		var blastRadius = radius*2.5;
+		var blastRadius = radius*4;
 
 		baneling.attack = function(target) {
-			utils.getAnimation('bane', [this.position.x, this.position.y, (blastRadius*2/64), (blastRadius*2/64), Math.random()*40], .5, null, 1).play();
+			var deathAnim = utils.getAnimationB({
+				spritesheetName: 'deathAnimations',
+				animationName: 'bane',
+				speed: .45,
+				transform: [this.position.x, this.position.y, 1.3, 1.3]
+			});
+			deathAnim.play();
+			utils.addSomethingToRenderer(deathAnim);
 			var nextLevelGo = false;
 
 			var bodiesToDamage = [];
-			currentGame.applyToBodiesByTeam(function(team) {baneling.team != team}, function(body) {
-				utils.distanceBetweenBodies(this.body, body) <= blastRadius && body.isAttackable;
+			currentGame.applyToBodiesByTeam(function(team) {return baneling.team != team}, function(body) {
+				return (utils.distanceBetweenBodies(this.body, body) <= blastRadius && body.isAttackable);
 			}.bind(this), function(body) {
-				body.sufferAttack(baneling.damage);
+				body.unit.sufferAttack(baneling.damage);
 			});
 			this.alreadyAttacked = true;
 			if(!this.alreadyDied)

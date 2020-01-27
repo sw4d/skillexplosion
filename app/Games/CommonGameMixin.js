@@ -2,7 +2,7 @@
  * This module is meant to provide common, game-lifecycle functionality, utility functions, and matter.js/pixi objects to a specific game module
  */
 
-define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils/Styles', 'utils/GameUtils'], function(Matter, PIXI, $, hs, h, particles, styles, utils) {
+define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'utils/Styles', 'utils/GameUtils', 'utils/UnitSystem'], function(Matter, PIXI, $, hs, h, styles, utils, UnitSystem) {
 
     var common = {
 
@@ -42,15 +42,9 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
         init: function(options) {
 
             /*
-             * blow up options into properties
+             * Blow up options into properties
              */
             $.extend(this, options);
-
-            //for backwards compatibility
-            if(this.selectionBox) {
-                //this variable conveys more meaning, so let's use this in various places instead of this.selectionBox
-                this.unitSelectionSystem = true;
-            }
 
             /*
              * create some other variables
@@ -70,6 +64,14 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             this.s = {s: 0, t: 0, f: 0, w: 0, sl: 0};
             var is = this['incr' + 'ement' + 'Sco' + 're'].bind(this);
             this.bodiesByTeam = {};
+
+            /*
+             * Incorporate UnitSystem if specified
+             */
+             if(this.enableUnitSystem) {
+                 // Create new unit system, letting it share some common game properties
+                 this.unitSystem = new UnitSystem(options);
+             }
 
             //begin tracking body vertice histories
             this.addTickCallback(function() {
@@ -255,13 +257,13 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             if(!this.noBorder) {
                 var border = [];
                 if(!this.noCeiling)
-                    border.push(Matter.Bodies.rectangle(this.canvas.width/2, -5, this.canvas.width, 10, { isStatic: true}));
+                    border.push(Matter.Bodies.rectangle(this.canvas.width/2, -5, this.canvas.width, 10, { isStatic: true, noWire: true}));
                 if(!this.noGround)
-                    border.push(Matter.Bodies.rectangle(this.canvas.width/2, this.canvas.height+25, this.canvas.width, 50, { isStatic: true}));
+                    border.push(Matter.Bodies.rectangle(this.canvas.width/2, this.canvas.height+25, this.canvas.width, 50, { isStatic: true, noWire: true}));
                 if(!this.noLeftWall)
-                    border.push(Matter.Bodies.rectangle(-5, this.canvas.height/2, 10, this.canvas.height, { isStatic: true}));
+                    border.push(Matter.Bodies.rectangle(-5, this.canvas.height/2, 10, this.canvas.height, { isStatic: true, noWire: true}));
                 if(!this.noRightWall)
-                    border.push(Matter.Bodies.rectangle(this.canvas.width+5, this.canvas.height/2, 10, this.canvas.height, { isStatic: true}));
+                    border.push(Matter.Bodies.rectangle(this.canvas.width+5, this.canvas.height/2, 10, this.canvas.height, { isStatic: true, noWire: true}));
 
                 this.addBodies(border);
             }
@@ -302,477 +304,9 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
                 }.bind(this), false, true);
             }
 
-            //create right click indication listener
-            if(!this.noRightClickIndicator) {
-                var clickPointSprite = utils.addSomethingToRenderer('MouseX', 'foreground', {x: -50, y: -50});
-                clickPointSprite.scale.x = .25;
-                clickPointSprite.scale.y = .25;
-                this.rightClickIndicator = clickPointSprite;
-                this.addEventListener('rightdown', function(event) {
-                    clickPointSprite.position = {x: event.data.global.x, y: event.data.global.y};
-                    if(this.selectionBox)
-                        this.box.clickPointSprite.position = {x: -50, y: -50};
-                }.bind(this), false, true);
-            }
-
-            /*
-             * Enable selection box
-             * Dispatch attack move, move, and generic keydown events (for abilities)
-             */
-            if(this.unitSelectionSystem) {
-                //create rectangle
-                this.box = Matter.Bodies.rectangle(-50, -50, 1, 1, {isSensor: true, isStatic: false});
-                this.box.collisionFilter.category = 0x0002;
-                this.box.selectedBodies = {};
-                this.box.permaPendingBody = null;
-                this.box.pendingSelections = {};
-                this.box.renderChildren = [{id: 'box', data: 'BlueTransparency'}];
-
-                //destination marker
-                this.box.clickPointSprite = utils.addSomethingToRenderer('MouseXGreen', 'foreground', {x: -50, y: -50});
-                this.box.clickPointSprite.scale.x = .25;
-                this.box.clickPointSprite.scale.y = .25;
-
-                var originalX = 0;
-                var originalY = 0;
-                var scaleX = 1;
-                var scaleY = 1;
-                var lastScaleX = 1;
-                var lastScaleY = 1;
-
-                //common method for changing the selection state (and visuals) of a group of bodies
-                var changeSelectionState = function(bodies, state, newValue) {
-                    if(bodies.isSelectable && bodies.renderlings && bodies.renderlings[state]) //if we were supplied just one body
-                        bodies.renderlings[state].visible = newValue;
-                    else { //we have many
-                        $.each(bodies, function(key, body) {
-                            if(body != null && body.isSelectable && body.renderlings && body.renderlings[state])
-                                body.renderlings[state].visible = newValue;
-                        })
-                    }
-                };
-
-                //transfer bodies from pending to selected
-                var executeSelection = function() {
-
-                    //for convenience
-                    var pendingBodyCount = Object.keys(this.box.pendingSelections).length;
-                    var loneSoldier = null;
-                    if(pendingBodyCount == 1) {
-                        loneSoldier = this.box.pendingSelections[parseInt(Object.keys(this.box.pendingSelections)[0])];
-                    }
-
-                    //if nothing pending, take no action
-                    if(pendingBodyCount == 0) {
-                        return;
-                    }
-
-                    //handle shift functionality
-                    if(keyStates['Shift']) {
-                        //If one, already-selected body is requested here, remove from selection
-                        if(loneSoldier && ($.inArray(loneSoldier.id.toString(), Object.keys(this.box.selectedBodies)) > -1)) {
-                            changeSelectionState(loneSoldier, 'selected', false);
-                            delete this.box.selectedBodies[loneSoldier.id];
-                        }
-                        else {
-                            //If we have multiple things pending (from drawing a box) this will override the permaPendingBody, unless permaPendingBody was also selected in the box
-                            //in which case we'll exclude it from the pending selections
-                            if(this.box.permaPendingBody && pendingBodyCount > 1 && this.box.selectionBoxActive && !this.box.boxContainsPermaPending) {
-                                changeSelectionState(this.box.permaPendingBody, 'selectionPending', false);
-                                delete this.box.pendingSelections[this.box.permaPendingBody.id]
-                            }
-
-                            //Add pending bodies to current selection
-                            $.extend(this.box.selectedBodies, this.box.pendingSelections)
-                        }
-                    } else {
-                        //Else create a brand new selection (don't add to current selection)
-                        //If we have multiple things pending (from drawing a box) this will override the permaPendingBody, unless permaPendingBody was also selected in the box
-                        if(this.box.permaPendingBody && pendingBodyCount > 1 && this.box.selectionBoxActive && !this.box.boxContainsPermaPending) {
-                            changeSelectionState(this.box.permaPendingBody, 'selectionPending', false);
-                            delete this.box.pendingSelections[this.box.permaPendingBody.id]
-                        }
-                        changeSelectionState(this.box.selectedBodies, 'selected', false);
-                        this.box.selectedBodies = $.extend({}, this.box.pendingSelections);
-                    }
-
-                    //Asssign the selected unit
-                    if(Object.keys(this.box.selectedBodies).length > 0) {
-                        this.selectedUnit = this.box.selectedBodies[Object.keys(this.box.selectedBodies)[0]];
-                    }
-
-                    //Show group destination of selected
-                    var groupDestination = 0;
-                    $.each(this.box.selectedBodies, function(key, body) {
-                        if(groupDestination == 0) {
-                            groupDestination = body.attackMoveDestination || body.destination;
-                        } else if(body.destination != groupDestination && body.attackMoveDestination != groupDestination) {
-                            groupDestination = null;
-                        }
-                    });
-                    if(groupDestination) {
-                        this.box.clickPointSprite.position = groupDestination;
-                        if(this.rightClickIndicator)
-                            this.rightClickIndicator.position = {x: -50, y: -50};
-                    } else {
-                        this.box.clickPointSprite.position = {x: -50, y: -50};
-                    }
-
-                    //Update visuals
-                    changeSelectionState(this.box.pendingSelections, 'selectionPending', false);
-                    changeSelectionState(this.box.selectedBodies, 'selected', true);
-
-                    //Refresh state
-                    this.box.permaPendingBody = null;
-                    this.box.pendingSelections = {};
-
-                    //Update selected attribute
-                    $.each(Matter.Composite.allBodies(this.renderer.engine.world), function(index, body) {
-                        body.isSelected = false;
-                    })
-
-                    $.each(this.box.selectedBodies, function(key, body) {
-                        body.isSelected = true;
-                    })
-
-                }.bind(this);
-
-                //Mouse down event
-                $('body').on('mousedown.selectionBox', function(event) {
-                    var canvasPoint = {x: 0, y: 0};
-                    var specifiedAttackTarget = null;
-                    this.renderer.interaction.mapPositionToPoint(canvasPoint, event.clientX, event.clientY);
-
-                    //Left click, used for both establishing a pending body and for attack-moving and dispatching events
-                    if(event.which == 1) {
-                        this.box.mouseDown = true;
-                        this.box.originalPoint = canvasPoint;
-
-                        //find bodies under mouse, use the vertice history method if possible
-                        var bodies = [];
-                        if(this.verticeHistories.length > 0) {
-                            $.each(this.verticeHistories, function(index, body) {
-                                if(!body.verticeCopy) return;// || !body.isSelectable) return;
-                                if(Matter.Vertices.contains(body.verticeCopy, this.box.originalPoint)) {
-                                    bodies.push(body);
-                                }
-                            }.bind(this));
-                        } else {
-                            bodies = Matter.Query.point(Matter.Composite.allBodies(this.renderer.engine.world), this.box.originalPoint);
-                        }
-
-                        //This is a perma body which we'll add to the pending selection, or we're trying to attack a singular target
-                        var singleAttackTarget = null;
-                        $.each(bodies, function(key, body) {
-                            if(body.isSelectable && !this.attackMove) {
-                                changeSelectionState(body, 'selectionPending', true);
-                                this.box.pendingSelections[body.id] = body; //needed for a special case when the game starts - no longer need this (i think)
-                                this.box.permaPendingBody = body;
-                            } else if(this.attackMove && body.isAttackable) {
-                                singleAttackTarget = body;
-                            }
-                        }.bind(this));
-
-                        //Attacker functionality, dispatch attackMove
-                        if(this.attackMove && !this.box.selectionBoxActive) {
-                            this.box.invalidateNextMouseUp = true;
-                            $.each(this.box.selectedBodies, function(key, body) {
-                                if(Object.keys(this.box.selectedBodies).length == 1)
-                                    body.isSoloMover = true;
-                                else
-                                    body.isSoloMover = false;
-
-                                if(body.isAttacker) {
-                                    if(singleAttackTarget) {
-                                        body.unit.attackSpecificTarget(canvasPoint, singleAttackTarget)
-                                    }
-                                    else {
-                                        body.unit.handleEvent({id: 'attackMove', target: canvasPoint})
-                                    }
-                                } else if(body.isMoveable) {
-                                    body.unit.handleEvent({id: 'move', target: canvasPoint})
-                                }
-                            }.bind(this))
-                            this.attackMove = false; //invalidate the key pressed state
-
-                            return;
-                        }
-
-                        var pendingBodyCount = Object.keys(this.box.pendingSelections).length;
-                        var loneSoldier = null;
-                        if(pendingBodyCount == 1) {
-                            loneSoldier = this.box.pendingSelections[parseInt(Object.keys(this.box.pendingSelections)[0])];
-                        }
-
-                        //handle control+click on mousedown (this is based on the sc2 controls)
-                        if(keyStates['Control'] && !this.box.selectionBoxActive && pendingBodyCount == 1) {//handle control clicking
-                            var likeTypes = $.each(Matter.Composite.allBodies(this.renderer.engine.world), function(index, body) {
-                                if(body.isUnit) {
-                                    if(body.unit.unitType == loneSoldier.unitType) {
-                                        this.box.pendingSelections[body.id] = body;
-                                    }
-                                }
-                            }.bind(this))
-
-                            //immediately execute a selection (again, based on sc2 style)
-                            executeSelection();
-                            this.box.invalidateNextMouseUp = true; //after a control click, mouseup does not execute a selection (sc2)
-                            this.box.invalidateNextBox = true;
-                        }
-
-                        //Dispatch ability on this click
-                        if(this.abilityDispatch) {
-                            if(this.selectedUnit) {
-                                this.selectedUnit.unit.handleEvent({id: this.abilityDispatch, target: canvasPoint});
-                                this.abilityDispatch = false;
-                            }
-                        }
-                    }
-
-                    //Right click - this should be modular in order to easily apply different right-click actions
-                    if(event.which == 3 && !this.box.selectionBoxActive) {
-                        //if we've pressed 'a' then right click, cancel the attack move and escape this flow
-                        if(this.attackMove) {
-                            this.attackMove = false;
-                            this.box.invalidateNextBox = false;
-                            return;
-                        }
-
-                        $.each(this.box.selectedBodies, function(key, body) {
-                            if(body.isMoveable) {
-                                body.unit.handleEvent({id: 'move', target: canvasPoint})
-                                // body.unit.groupRightClick(canvasPoint);
-                                if(Object.keys(this.box.selectedBodies).length == 1)
-                                    body.isSoloMover = true;
-                                else
-                                    body.isSoloMover = false;
-                            }
-                        }.bind(this))
-                    }
-                }.bind(this));
-
-                $('body').on('mousemove.selectionBox', function(event) {
-                    if(this.box.mouseDown && this.box.renderlings && !this.box.invalidateNextBox) {
-                        this.box.selectionBoxActive = true;
-                        var newPoint = {x: 0, y: 0};
-                        this.renderer.interaction.mapPositionToPoint(newPoint, event.clientX, event.clientY);
-                        this.box.renderlings.box.scale.x = newPoint.x - this.box.originalPoint.x;
-                        this.box.renderlings.box.scale.y = newPoint.y - this.box.originalPoint.y;
-                        var newScaleX = (newPoint.x - this.box.originalPoint.x) || 1;
-                        var newScaleY = (newPoint.y - this.box.originalPoint.y) || 1;
-                        Matter.Body.scale(this.box, newScaleX/lastScaleX, newScaleY/lastScaleY); //scale to new value
-                        Matter.Body.setPosition(this.box, {x: newPoint.x - (newPoint.x - this.box.originalPoint.x)/2, y: newPoint.y - (newPoint.y - this.box.originalPoint.y)/2});
-                        lastScaleX = newScaleX;
-                        lastScaleY = newScaleY;
-                    }
-                }.bind(this));
-
-                $('body').on('mouseup.selectionBox', function(event) {
-                    if(event.which == 1) {
-                        this.box.mouseDown = false;
-                        Matter.Body.setPosition(this.box, {x: -500, y: -1000});
-                        if(!this.box.invalidateNextMouseUp) {
-                            executeSelection();
-                        } else {
-                            this.box.invalidateNextMouseUp = false;
-                            this.box.invalidateNextBox = false
-                        }
-                        this.box.selectionBoxActive = false;
-                    }
-                }.bind(this));
-
-                Matter.Events.on(this.box, 'onCollideActive', function(pair) {
-                    var otherBody = pair.pair.bodyB == this.box ? pair.pair.bodyA : pair.pair.bodyB;
-                    if(otherBody.isMoving && this.box.bounds.max.x-this.box.bounds.min.x < 25 && this.box.bounds.max.y-this.box.bounds.min.y < 25) return;
-                    if(!otherBody.isMoving && otherBody.isSelectable) {
-                        changeSelectionState(otherBody, 'selectionPending', true);
-                        this.box.pendingSelections[otherBody.id] = otherBody;
-                        if(otherBody == this.box.permaPendingBody)
-                            this.box.boxContainsPermaPending = true;
-                    }
-                    if(otherBody.isSmallerBody && otherBody.unit.isMoving && otherBody.unit.isSelectable) {
-                        changeSelectionState(otherBody.unit, 'selectionPending', true);
-                        this.box.pendingSelections[otherBody.unit.body.id] = otherBody.unit.body;
-                        if(otherBody.unit.body == this.box.permaPendingBody)
-                            this.box.boxContainsPermaPending = true;
-                    }
-                }.bind(this));
-
-                Matter.Events.on(this.box, 'onCollide', function(pair) {
-                    var otherBody = pair.pair.bodyB == this.box ? pair.pair.bodyA : pair.pair.bodyB;
-                    if(otherBody.isMoving && this.box.bounds.max.x-this.box.bounds.min.x < 25 && this.box.bounds.max.y-this.box.bounds.min.y < 25) return;
-                    if(!otherBody.isMoving && otherBody.isSelectable) {
-                        changeSelectionState(otherBody, 'selectionPending', true);
-                        this.box.pendingSelections[otherBody.id] = otherBody;
-                        if(otherBody == this.box.permaPendingBody)
-                            this.box.boxContainsPermaPending = true;
-                    }
-                    if(otherBody.isSmallerBody && otherBody.unit.isMoving && otherBody.unit.isSelectable) {
-                        changeSelectionState(otherBody.unit, 'selectionPending', true);
-                        this.box.pendingSelections[otherBody.unit.body.id] = otherBody.unit.body;
-                        if(otherBody.unit.body == this.box.permaPendingBody)
-                            this.box.boxContainsPermaPending = true;
-                    }
-                }.bind(this));
-
-                Matter.Events.on(this.box, 'onCollideEnd', function(pair) {
-                    var otherBody = pair.pair.bodyB == this.box ? pair.pair.bodyA : pair.pair.bodyB;
-                    if(!otherBody.isMoving && otherBody.isSelectable && otherBody != this.box.permaPendingBody) {
-                        changeSelectionState(otherBody, 'selectionPending', false);
-                        delete this.box.pendingSelections[otherBody.id];
-                    }
-                    if(otherBody.isSmallerBody && otherBody.unit.isMoving && otherBody.unit.body != this.box.permaPendingBody) {
-                        changeSelectionState(otherBody.unit, 'selectionPending', false);
-                        delete this.box.pendingSelections[otherBody.unit.body.id];
-                    }
-                    if((otherBody.isSmallerBody && otherBody.unit.body == this.box.permaPendingBody && otherBody.unit.isSelectable) ||
-                        otherBody.isSelectable && otherBody == this.box.permaPendingBody)
-                    {
-                            this.box.boxContainsPermaPending = false;
-                    }
-                }.bind(this));
-
-                //Mouse hover
-                var pastHoveredBodies = [];
-                this.addTickCallback(function(event) {
-                    if(!this.box.selectionBoxActive) {
-
-                        //if we have a perma, we won't act on hovering pending selections, so break here
-                        if(this.box.permaPendingBody) return;
-
-                        this.box.pendingSelections = {};
-
-                        //find bodies under mouse which are selectable, use the vertice history method if possible
-                        var bodies = [];
-                        if(this.verticeHistories.length > 0) {
-                            $.each(this.verticeHistories, function(index, body) {
-                                if(!body.verticeCopy) return;
-                                if(Matter.Vertices.contains(body.verticeCopy, this.mousePosition)) {
-                                    bodies.push(body);
-                                }
-                            }.bind(this));
-                        } else {
-                            bodies = Matter.Query.point(Matter.Composite.allBodies(this.renderer.engine.world), this.mousePosition);
-                        }
-
-                        bodies = $.grep(bodies, function(body, index) {
-                            return body.isSelectable;
-                        })
-
-                        //reset past, non-perma bodies we were hovering over previously
-                        $.each(pastHoveredBodies, function(index, body) {
-                            changeSelectionState(body, 'selectionPending', false);
-                        }.bind(this))
-
-                        //set state of bodies under our mouse and identify them as pastHoveredBodies for the next tick
-                        pastHoveredBodies = [];
-                        $.each(bodies, function(index, body) {
-                            this.box.pendingSelections[body.id] = body;
-                            changeSelectionState(body, 'selectionPending', true);
-                            pastHoveredBodies.push(body);
-                        }.bind(this))
-                    }
-                }.bind(this));
-
-                //Dispatch hovering event to units
-                var pastHoveredUnits = [];
-                this.addTickCallback(function(event) {
-
-                    //Find bodies under mouse position, use vertice history if possible
-                    var bodies = [];
-                    if(this.verticeHistories.length > 0) {
-                        $.each(this.verticeHistories, function(index, body) {
-                            if(!body.verticeCopy) return;
-                            if(Matter.Vertices.contains(body.verticeCopy, this.mousePosition)) {
-                                bodies.push(body);
-                            }
-                        }.bind(this));
-                    } else {
-                        bodies = Matter.Query.point(Matter.Composite.allBodies(this.renderer.engine.world), this.mousePosition);
-                    }
-
-                    var units = $.grep(bodies, function(body, index) {
-                        return body.isUnit;
-                    })
-
-                    $.each(units, function(i, unit) {
-                        if(unit.hover)
-                            unit.hover({team: currentGame.playerTeam});
-                        pastHoveredUnits.push(unit);
-                    }.bind(this))
-                }.bind(this))
-
-                /*
-                 * Change cursor style, set attackMove state
-                 * Dispatch events
-                 */
-                 this.attackMove = false;
-                 Object.defineProperty(this, 'attackMove', {set: function(value) {
-                     this._attackMove = value;
-                     if(value) {
-                         utils.setCursorStyle('crosshair');
-                     }
-                     else
-                         utils.setCursorStyle('auto');
-                 }.bind(this), get: function() {
-                     return this._attackMove;
-                 }});
-
-                 //A or a dispatch (reserved)
-                 $('body').on('keydown.selectionBox', function( event ) {
-                     if(event.key == 'a' || event.key == 'A') {
-                         $.each(this.box.selectedBodies, function(prop, obj) {
-                             if(obj.isAttacker) {
-                                 if(!this.box.selectionBoxActive) {
-                                     this.box.invalidateNextBox = true;
-                                     this.attackMove = true;
-                                 }
-                             }
-                         }.bind(this))
-                     }
-                 }.bind(this));
-
-                 //S or s dispatch (reserved)
-                  $('body').on('keydown.selectionBox', function( event ) {
-                      if(event.key == 's' || event.key == 'S') {
-                          $.each(this.box.selectedBodies, function(prop, obj) {
-                              if(obj.isMoveable) {
-                                  obj.unit.stop();
-                              }
-                          }.bind(this))
-                      }
-                  }.bind(this));
-
-                 //dispatch generic key events
-                 $('body').on('keydown.selectionBox', function( event ) {
-                         this.abilityDispatch = event.key.toLowerCase();
-                 }.bind(this));
-
-                 //toggle life bars with Alt
-                 $('body').on('keydown.selectionBox', function( event ) {
-                     if(event.key == 'Alt') {
-                         this.applyToBodiesByTeam(function() {return true}, function(body) {return body.unit}, function(body) {
-                                 var unit = body.unit;
-                                 unit.renderlings['healthbarbackground'].visible = true;
-                                 unit.renderlings['healthbar'].visible = true;
-                             })
-                     }
-                 }.bind(this));
-
-                 $('body').on('keyup.selectionBox', function( event ) {
-                     if(event.key == 'Alt') {
-                         this.applyToBodiesByTeam(function() {return true}, function(body) {return body.unit}, function(body) {
-                                 var unit = body.unit;
-                                 unit.renderlings['healthbarbackground'].visible = false;
-                                 unit.renderlings['healthbar'].visible = false;
-                             })
-                     }
-                 }.bind(this));
-
-                this.addBody(this.box);
-            };
-
-            //dispatch other events
+            //initialize unitSystem, this creates the selection box, dispatches unit events, etc
+            if(this.unitSystem)
+                this.unitSystem.initialize();
 
             this.regulationPlay = $.Deferred();
             this.regulationPlay.done(this.endGame.bind(this));
@@ -855,13 +389,6 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             }.bind(this))
         },
 
-        //death pact currently supports other units, bodies, tick callbacks, timers, and finally functions to execute
-        deathPact: function(master, slave) {
-            if(!master.slaves)
-                master.slaves = [];
-            master.slaves.push(slave);
-        },
-
         //This method has the heart but is poorly designed
         //Right now it'll support slaves which are units, bodies, tickCallbacks, timers, and finally functions to execute
         removeSlaves: function(slaves) {
@@ -876,7 +403,7 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
                 }
                 else if(slave.isTickCallback) {
                     this.removeTickCallback(slave);
-                    //console.info("removing " + slave)
+                    // console.info("removing " + slave.slaveId)
                 }
                 else if(slave.isTimer) {
                     this.invalidateTimer(slave);
@@ -918,22 +445,26 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             //remove body from world
             Matter.World.remove(this.world, [body]);
 
-            //clean up vertice history and bodiesByTeam
+            //clean up vertice history
             var index = this.verticeHistories.indexOf(body);
             if(index > -1)
                 this.verticeHistories.splice(index, 1);
 
+            //Handle bodiesByTeam. Since bodiesByTeam is a loopable datastructure let's grep instead of splice
+            //(don't want to alter the array since we might be iterating over it)
             if(body.team) {
                 var bbtindex = this.bodiesByTeam[body.team].indexOf(body);
                 if(bbtindex > -1)
-                    this.bodiesByTeam[body.team].splice(bbtindex, 1);
+                    this.bodiesByTeam[body.team] = $.grep(this.bodiesByTeam[body.team], function(obj, index) {
+                            return index != bbtindex;
+                    })
             }
 
             //clean up selection box data related to this body
-            if(this.selectionBox && body.isSelectable) {
-                delete this.box.selectedBodies[body.id];
-                delete this.box.pendingSelections[body.id];
-            }
+            // if(this.selectionBox && body.isSelectable) {
+            //     delete this.box.selectedBodies[body.id];
+            //     delete this.box.pendingSelections[body.id];
+            // }
 
             //for internal use
             body.hasBeenRemoved = true;
@@ -944,7 +475,7 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             teamPredicate = teamPredicate || function(team) {return true};
             bodyPredicate = bodyPredicate || function(body) {return true};
             $.each(this.bodiesByTeam, function(i, team) {
-                if(teamPredicate(team)) {
+                if(teamPredicate(i)) {
                     $.each(team, function(i, body) {
                         if(bodyPredicate(body)) {
                             f(body);
@@ -983,55 +514,48 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
 
             if(!this.world) return;
 
-            //Remove units, this could be way better
+            //Remove units safely (removeUnit())
             var unitsToRemove = [];
-            this.applyToBodiesByTeam(null, function(body) {
+            utils.applyToBodiesByTeam(null, function(body) {
                 return body.unit;
             }, function(body) {
                 unitsToRemove.push(body.unit);
             }.bind(this));
+
             $.each(unitsToRemove, function(i, unit) {
                 this.removeUnit(unit);
             }.bind(this))
 
-            //remove bodies safely
+            //Remove bodies safely (removeBodies())
             this.removeBodies(this.world.bodies);
+
+            //Clear the matter world (I cant recall if this is necessary)
             Matter.World.clear(this.world, false);
 
-            //clear the engine (clears broadphase state)
+            //Clear the engine (clears broadphase state)
             Matter.Engine.clear(this.engine);
 
-            //clear the renderer
+            //Clear the renderer, save persistables
             this.renderer.clear(options.noMercy, options.savePersistables);
 
+            //Clear listeners, save invincible listeners
             this.clearListeners(options.noMercy);
             this.clearTickCallbacks(options.noMercy);
             this.invalidateTimers(options.noMercy);
+
+            //Clear vertice histories
             this.verticeHistories = [];
 
+            //Clear body listeners if no mercy
             if(options.noMercy) {
                 $('body').off();
             }
 
-            if(this.selectionBox) {
-                if(this.box) {
-                    Matter.Events.off(this.box, 'onCollide');
-                    this.box = null;
-                }
-                $('body').off('mousedown.selectionBox');
-                $('body').off('mousemove.selectionBox');
-                $('body').off('mouseup.selectionBox');
-                $('body').off('keydown.selectionBox');
-                $('body').off('keyup.selectionBox');
-                $('body').off('keypress.selectionBox'); //remove if games seem normal
+            //Clear unit system
+            if(this.unitSystem) {
+                this.unitSystem.cleanUp();
             }
         },
-
-        // distanceBetweenBodies: function(bodyA, bodyB) {
-        //     var a = bodyA.position.x - bodyB.position.x;
-        //     var b = bodyA.position.y - bodyB.position.y;
-        //     return Math.sqrt(a*a + b*b);
-        // },
 
         resetGame: function() {
             if(this.score)
@@ -1050,12 +574,17 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             timer.originalRuns = timer.runs;
 
             //add a reset method to the timer
-            if(!timer.reset) timer.reset = timer.execute = function() {
+            if(!timer.reset) timer.reset = timer.execute = function(options) {
+                var options = options || {};
                 this.timeElapsed = 0;
                 this.percentDone = 0;
 
                 if(this.runs == 0)
                     this.runs = null;
+                if(options.runs)
+                    this.runs = options.runs;
+                if(this.resetExtension)
+                    this.resetExtension();
                 this.done = false;
                 this.started = false;
                 this.paused = false;
@@ -1160,7 +689,12 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             var self = this;
             var tickDeltaWrapper = function(event) {
                 if(tickDeltaWrapper.removePending) return;
-                deltaTime = event.timestamp - lastTimestamp;
+                if(lastTimestamp) {
+                    deltaTime = event.timestamp - lastTimestamp;
+                }
+                else {
+                    deltaTime = .1666;
+                }
                 lastTimestamp = event.timestamp;
                 event.deltaTime = deltaTime;
                 if(invincible || (self.gameState == 'playing'))

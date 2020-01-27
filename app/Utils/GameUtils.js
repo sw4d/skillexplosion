@@ -13,7 +13,7 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             return Math.sqrt(a*a + b*b);
         },
 
-        //need to redesign this method, it's so confusingly dumb
+        //Deprecated: replace remaining calls with getAnimationB, then rename that method to getAnimation
         getAnimation: function(baseName, transform, speed, where, playThisManyTimes, rotation, body, numberOfFrames, startFrameNumber, bufferUnderTen) {
             var frames = [];
             var numberOfFrames = numberOfFrames || PIXI.Loader.shared[baseName+'FrameCount'] || 10;
@@ -72,10 +72,13 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
 
         /*
          * options {
-         *  numberOfFrames
+         *  (numberOfFrames
          *  startFrameNumber
          *  baseName
-         *  bufferUnderTen
+         *  bufferUnderTen)
+         *  OR
+         *  (animationName
+         *  spritesheetName)
          *  transform
          *  speed
          *  playThisManyTimes
@@ -246,7 +249,7 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
         addSomethingToRenderer: function(something, where, options) {
             if($.type(where) == 'object') {
                 options = where;
-                where = null;
+                where = options.where;
             }
             options = options || {};
 
@@ -280,9 +283,20 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
                 something.tint = options.tint;
             if(options.rotation)
                 something.rotation = options.rotation;
+            if(options.sortYOffset)
+                something.sortYOffset = options.sortYOffset;
+            if(options.alpha != undefined)
+                something.alpha = options.alpha;
+
+            //add options to escape without adding it to the renderer
+            if(options.dontAdd) return something;
 
             currentGame.renderer.addToPixiStage(something, where);
             return something;
+        },
+
+        createDisplayObject: function(something, options) {
+            return this.addSomethingToRenderer(something, $.extend(options, {dontAdd: true}))
         },
 
         removeSomethingFromRenderer: function(something, where) {
@@ -319,6 +333,43 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             if(sprite.position.y - deletePointAdjustment > currentGame.canvas.height)
                 return true;
             return false;
+        },
+
+        getRandomPlacementWithinCanvasBounds: function() {
+            var placement = {};
+            placement.x = Math.random() * currentGame.canvasEl.getBoundingClientRect().width;
+            placement.y = Math.random() * currentGame.canvasEl.getBoundingClientRect().height;
+            return placement;
+        },
+
+        addRandomVariationToGivenPosition: function(position, randomFactorX, randomFactorY) {
+            position.x += (1 - 2*Math.random()) * randomFactorX;
+            position.y += (1 - 2*Math.random()) * (randomFactorY || randomFactorX);
+            return position;
+        },
+
+        addAmbientLightsToBackground: function(hexColorArray, where, intensity) {
+            var numberOfLights = hexColorArray.length;
+            var spacing = this.getCanvasWidth()/(numberOfLights*2);
+            $.each(hexColorArray, function(i, color) {
+                this.addSomethingToRenderer("AmbientLight" + (i%3 + 1), where || 'backgroundOne',
+                    {position: this.addRandomVariationToGivenPosition({x: ((i+1)*2-1) * spacing, y: this.getCanvasHeight()/2}, 300/numberOfLights, 300), tint: color, alpha: intensity || .25});
+            }.bind(this))
+        },
+
+        //apply something to bodies by team
+        applyToBodiesByTeam: function(teamPredicate, bodyPredicate, f) {
+            teamPredicate = teamPredicate || function(team) {return true};
+            bodyPredicate = bodyPredicate || function(body) {return true};
+            $.each(currentGame.bodiesByTeam, function(i, team) {
+                if(teamPredicate(i)) {
+                    $.each(team, function(i, body) {
+                        if(bodyPredicate(body)) {
+                            f(body);
+                        }
+                    })
+                }
+            })
         },
 
         calculateRandomPlacementForBodyWithinCanvasBounds: function(body, neatly) {
@@ -371,6 +422,10 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             return placement;
         },
 
+        offScreenPosition: function() {
+            return {x: -9999, y: -9999};
+        },
+
         isoDirectionBetweenPositions: function(v1, v2) {
             var angle = Matter.Vector.angle({x: 0, y: 0}, Matter.Vector.sub(v2, v1));
             var dir = null;
@@ -414,6 +469,10 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
           return currentGame.canvasEl.getBoundingClientRect().width;
         },
 
+        getCanvasWH: function() {
+          return {x: this.getCanvasWidth(), y: this.getCanvasHeight()};
+        },
+
         getSound: function(name, options) {
             options = options || {};
             options.src = '/app/Sounds/' + name;
@@ -423,6 +482,12 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
         //1, 4 return an int in (1, 2, 3, 4)
         getRandomIntInclusive: function(low, high) {
             return Math.floor(Math.random() * (high-low+1) + low);
+        },
+
+        getRandomElementOfArray: function(array) {
+            if(array && array.length > 0) {
+                return array[this.getRandomIntInclusive(0, array.length-1)];
+            }
         },
 
         cloneVertices: function(vertices) {
@@ -493,21 +558,28 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             $('*').css('cursor', style);
         },
 
-        createParticleEmitter: function(where, config) {
+        /*
+         * options {
+         *   where: stage
+         *   texture: particle texture
+         *   config: particle configuration (see https://pixijs.io/pixi-particles-editor/#)
+         * }
+         */
+        createParticleEmitter: function(options) {
             // Create a new emitter
             var emitter = new PIXI.particles.Emitter(
 
                 // The PIXI.Container to put the emitter in
                 // if using blend modes, it's important to put this
                 // on top of a bitmap, and not use the root stage Container
-                where,
+                options.where,
 
                 // The collection of particle images to use
-                [PIXI.Texture.fromImage('https://skillexplosion.com/app/Textures/particle.png')],
+                [options.texture || PIXI.Texture.fromImage('../app/Textures/particle.png')],
 
                 // Emitter configuration, edit this to change the look
                 // of the emitter
-                config
+                options.config
             );
 
             // Calculate the current time
@@ -583,11 +655,15 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
         },
 
         //return angle to rotate something facing an original direction, towards a point
-        angleBetweenVectors: function(origin, destination, orientation) {
+        pointInDirection: function(origin, destination, orientation) {
             var originAngle = Matter.Vector.angle(origin, orientation || {x: origin.x, y: origin.y + 1});
             var destAngle = Matter.Vector.angle(origin, {x: destination.x, y: (origin.y + (origin.y-destination.y))});
 
             return originAngle - destAngle;
+        },
+
+        angleBetweenTwoVectors: function(vecA, vecB) {
+            return Math.acos((Matter.Vector.dot(vecA, vecB)) / (Matter.Vector.magnitude(vecA) * Matter.Vector.magnitude(vecB)))
         },
 
         //death pact currently supports other units, bodies, tick callbacks, timers, and finally functions to execute
@@ -599,8 +675,8 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
             var added = false;
             if(slaveId) {
                 slave.slaveId = slaveId;
-                $.each(master.slaves, function(i, slave) {
-                    if(slave.slaveId == slaveId) {
+                $.each(master.slaves, function(i, existingSlave) {
+                    if(existingSlave.slaveId == slaveId) {
                         master.slaves[i] = slave;
                         added = true;
                     }
@@ -612,16 +688,6 @@ define(['matter-js', 'pixi', 'jquery', 'utils/HS', 'howler', 'particles', 'utils
     };
 
     //aliases
-    utils.addTime = utils.addToGameTimer;
-    utils.texture = utils.getPreloadedTexture;
-    utils.addRunnerCallback = utils.addTickCallback;
-    utils.removeRunnerCallback = utils.removeTickCallback;
-    utils.addBodies = utils.addBody;
-    utils.listeners = utils.eventListeners;
-    utils.addEventListener = utils.addListener;
-    utils.addTickListener = utils.addTickCallback;
-    utils.removeEventListener = utils.removeListener;
-    utils.removeText = utils.removeSprite;
     utils.offStage = utils.bodyRanOffStage;
     utils.getIntBetween = utils.getRandomIntInclusive;
 
